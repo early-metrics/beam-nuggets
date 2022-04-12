@@ -263,13 +263,13 @@ class SqlAlchemyDB(object):
         self._session.bind.dispose()
         self._session = None
 
-    def read(self, table_name):
-        table = self._open_table_for_read(table_name)
+    def read(self, table_name, schema):
+        table = self._open_table_for_read(table_name, schema)
         for record in table.records(self._session):
             yield record
 
-    def query(self, table_name, query):
-        table = self._open_table_for_read(table_name)
+    def query(self, table_name, query, schema):
+        table = self._open_table_for_read(table_name, schema)
         for record in table.query_records(self._session, query):
             yield record
 
@@ -301,9 +301,10 @@ class SqlAlchemyDB(object):
                 create_insert_f = create_insert
         return create_insert_f
 
-    def _open_table_for_read(self, name):
+    def _open_table_for_read(self, name, schema):
         return self._open_table(
             name=name,
+            schema=schema,
             get_table_f=load_table
         )
 
@@ -315,17 +316,18 @@ class SqlAlchemyDB(object):
             record=record
         )
 
-    def _open_table(self, name, get_table_f, **get_table_f_params):
-        table = self._name_to_table.get(name, None)
+    def _open_table(self, name, schema, get_table_f, **get_table_f_params):
+        name_with_schema = f'{schema}.{name}'
+        table = self._name_to_table.get(name_with_schema, None)
         if not table:
-            self._name_to_table[name] = (
-                self._get_table(name, get_table_f, **get_table_f_params)
+            self._name_to_table[name_with_schema] = (
+                self._get_table(name, schema, get_table_f, **get_table_f_params)
             )
-            table = self._name_to_table[name]
+            table = self._name_to_table[name_with_schema]
         return table
 
-    def _get_table(self, name, get_table_f, **get_table_f_params):
-        table_class = get_table_f(self._session, name, **get_table_f_params)
+    def _get_table(self, name, schema, get_table_f, **get_table_f_params):
+        table_class = get_table_f(self._session, name, schema, **get_table_f_params)
         if table_class:
             table = _Table(table_class=table_class, name=name)
         else:
@@ -375,18 +377,19 @@ class _Table(object):
         return {col: getattr(db_record, col) for col in column_names}
 
 
-def load_table(session, name):
+def load_table(session, name, schema):
     table_class = None
     engine = session.bind
-    if inspect(engine).has_table(name):
+    if engine.dialect.has_table(engine, name, schema=schema):
+    # if inspect(engine).has_table(name):
         metadata = MetaData(bind=engine)
-        table_class = create_table_class(Table(name, metadata, autoload=True))
+        table_class = create_table_class(Table(name, metadata, autoload=True, schema=schema))
     return table_class
 
 
-def create_table(session, name, table_config, record):
+def create_table(session, name, table_config, record, schema):
     # Attempt to load from the DB
-    table_class = load_table(session, name)
+    table_class = load_table(session, name, schema)
 
     if not table_class and table_config.create_table_if_missing:
         define_table_f = (
@@ -405,7 +408,7 @@ def create_table(session, name, table_config, record):
             table_class = create_table_class(sqlalchemy_table)
             session.flush()
         except Exception as e:
-            table_class = load_table(session, name)
+            table_class = load_table(session, name, schema)
             if table_class:
                 # If another worker has already created the table, get ready
                 # for more transactions and carry on
