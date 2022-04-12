@@ -311,6 +311,7 @@ class SqlAlchemyDB(object):
     def _open_table_for_write(self, table_config, record):
         return self._open_table(
             name=table_config.name,
+            schema=None,
             get_table_f=create_table,
             table_config=table_config,
             record=record
